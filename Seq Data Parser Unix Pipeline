@@ -1,0 +1,151 @@
+#!/bin/bash
+#Greeting
+echo
+echo "Hi there! This is a BINF6410 group project - 3 "
+echo "Below is our team member!" 
+echo "Lam, Yuen Yu Phyllis"
+echo "Sidhu, Akaash"
+echo "Manesis, Nikolaos"
+echo "Yu, Jiaojia"
+echo "Sheng, Yiru" 
+
+TIMESTAMP=$(date +%Y-%m-%d_%Hh%Mm%Ss)
+
+echo
+echo "Starting time: $TIMESTAMP"
+echo
+
+#Step 1: Sequence Demultiplexing by Sabre 
+
+echo "Location of FASTQ files"  
+read FASTQ
+
+echo "Location of BARCODE files"
+read BAR
+
+echo "Location of Reference Genome file" 
+read REF
+
+echo
+echo "After the process is done ..."
+echo "Go to Directory DeMulti for Result!"
+echo "Check general.log for Completion Status of Each Step!"
+echo
+
+mkdir DeMulti
+cd DeMulti 
+
+# From here, we will be working in the directory DeMulti. 
+
+exec &> sabre.log
+
+# Run the program
+
+sabre se -f $FASTQ -b $BAR -u unk.fastq
+		if [ $? -ne 0 ];then
+				printf "Sabre-Problem Detected!!"
+				exit 1
+		else 
+				printf "Step 1-Demultiplexing by Sabre-Completed
+" > general.log
+		fi
+
+# option -se: Since the query sequences are single-ended, then we need to use the option -se.  
+
+# Step 2: Cut the Adaptor from Sequences 
+
+ADAP=AGATCGGAA
+exec &> cutadapt.log
+parallel -j 4 cutadapt -a $ADAP -m 50 -o {}.fastq {}.fq ::: $(ls -1 *.fq | sed 's/.fq//')
+		if [ $? -ne 0 ]; then
+				printf "Cutadapt-Problem Detected!!"
+				exit 1
+		else
+				printf "Step 2-Adaptor Cutting by Cutadapt-Completed
+" >> general.log
+		fi
+		
+# Step 3: Reads Mapping by BWA
+
+exec &> bwa.log
+
+parallel -j 3 bwa mem -t 2 $REF {}.fastq ">" {}.sam ::: $(ls -1 *.fastq | sed 's/.fastq//')
+		if [ $? -ne 0 ]; then 
+				printf "BWA - Problem Detected!!"
+				exit 1
+		else  
+				printf "Step 3 - Reads Mapping by BWA - Completed
+" >> general.log
+		fi
+
+# Step 4: Convert SAM to BAM (Format Change) --> Sort BAM
+
+exec &> convert.log
+
+parallel -j 4 samtools view -b -S -h {}.sam ">" {}.temp.bam ::: $(ls -1 *.sam | sed 's/.sam//')
+		if [ $? -ne 0 ]; then 
+				printf "Samtools-temp - Problem Detected!!"
+				exit 1
+		else 
+				printf "Step 4-1 - SAMtools-temp - Completed
+" >> general.log
+		fi
+		
+parallel -j 4 samtools sort {}.temp.bam -o {}.sort.bam ::: $(ls -1 *.temp.bam | sed 's/.temp.bam//')
+		if [ $? -ne 0 ]; then 
+				printf "Samtools-sort - Problem Detected!!"
+				exit 1
+		else 
+				printf "Step 4-2 - Sort BAM - Completed
+" >> general.log
+		fi
+
+parallel -j 4 samtools index {} ::: $(ls -1 *.sort.bam)
+		if [ $? -ne 0 ]; then 
+				printf "Samtools-index - Problem Detected!!"
+				exit 1
+		else 
+				printf "Step 4-3 - Samtools-index - Completed
+" >> general.log
+		fi
+
+for i in $(ls -1 *.sort.bam)
+		do
+				printf "$PWD/${i}\n" >> "bamlist"
+		if [ $? -ne 0 ]; then 
+				printf "BAMlist - Problem Detected!!"
+				exit 1
+		fi
+	done
+
+printf "Step 4-4 - BAMlist - Completed
+" >> general.log
+
+# Step 5: Variant Calling 
+
+exec &> samt_var.log
+
+bamlist=/Users/paulayu/Desktop/MBINF/Fall2018/6410/DeMulti/bamlist
+
+samtools mpileup -g -f $REF -b $bamlist > variants.bcf
+
+		if [ $? -ne 0 ]; then
+				printf "Samtools_mpileup - Problem Detected!!"
+                exit 1
+		else 
+				printf "Step 5 - Variant Calling - Completed
+" >> general.log
+		fi
+
+bcftools call -mv variants.bcf > variants.vcf
+
+		if [ $? -ne 0 ]; then
+                printf "bcf2vcf - Problem Detected!!"
+                exit 1
+		else 
+				printf "Step 5-1 - BCF2VCF - Completed
+" >> general.log
+				printf "All steps are completed!" >> general.log
+        fi
+        
+exit 0
